@@ -1,4 +1,4 @@
-.vscode/
+*.vscode/
 sdl/
-.exe
-.dll
+*.exe
+*.dll
