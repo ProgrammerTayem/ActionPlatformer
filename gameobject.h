@@ -5,6 +5,8 @@
 #include <SDL3/SDL.h>
 #include <vector>
 
+class UIStack;
+
 enum class ObjectType{
     player, level, enemy, bullet
 };
@@ -26,14 +28,14 @@ enum class enemyState{
 };
 
 enum class buttonState{
-    inactive, active, hovering
+    active, inactive, hidden
 };
 
 struct PlayerData{
     float HP, HPmax;
     PlayerState state;
     Timer WeaponTimer;
-    PlayerData() : HP(250.0f), HPmax(250.0), state(PlayerState::idle), WeaponTimer(0.1f) {}
+    PlayerData() : HP(200.0f), HPmax(200.0), state(PlayerState::idle), WeaponTimer(0.15f) {}
 };
 
 struct BulletData{
@@ -43,10 +45,10 @@ struct BulletData{
 
 struct EnemyData{
     float HP, HPmax;
-    Timer dmgDuration, hitRate;
+    Timer dmgDuration, contactRate;
     enemyState state;
-    EnemyData() : HP(100.0f), HPmax(100.0f), dmgDuration(0.5f), state(enemyState::shambling), hitRate(0.7f) {
-        hitRate.step(0.7f);
+    EnemyData() : HP(200.0f), HPmax(200.0f), dmgDuration(0.5f), contactRate(0.25f), state(enemyState::shambling) {
+        contactRate.prime();
     }
 };
 struct LevelData{};
@@ -69,7 +71,7 @@ struct GameObject{
     int curAnimation, spriteFrame;
     float dir;
     float maxSpeedX;
-    bool dynamic, grounded, flashes;
+    bool dynamic, grounded, flashes, allowsGoingThrough;
     ObjectTarget Tar;
     
     GameObject(): data{.level = LevelData()}, flashTimer(0.05)
@@ -89,29 +91,43 @@ struct GameObject{
     }
 };
 
-struct colorChannel{
-    Uint8 r, g, b, alpha;
-    colorChannel(){
-        r = g = b = 0;
-        alpha = 255;
-    }
-    colorChannel(Uint8 a, Uint8 b, Uint8 c, Uint8 d){
-        r = a, g = b, b = c, alpha = d;
+struct Button{
+    glm::vec2 pos, txt_dim;
+    float h, w;
+    const char *s;
+    SDL_Color border, text;
+    glm::vec3 box;
+    SDL_Texture *texture, *txtTexture;
+    std::function<void(Button &)> onClick;
+    std::vector<buttonState> StateChanges;
+    bool pressed, hovered;
+    buttonState state;
+    Button(){
+        pos = glm::vec2(0, 0);
+        h = 25.0f, w = 150.f;
+        text = SDL_Color{0, 0, 0, 255};
+        border = text;
+        box = glm::vec3{255.0, 255.0, 255.0};
+        texture = nullptr;
+        pressed = hovered = false;
+        state = buttonState::hidden;
+        s = NULL;
     }
 };
 
-struct Button{
-    buttonState state;
-    glm::vec2 pos;
-    float h, w;
-    const char *s;
-    colorChannel box, border, text;
-    SDL_Texture *texture;
-    Button(){
-        state = buttonState::active;
-        pos = glm::vec2(0, 0);
-        h = 25.0f, w = 150.f;
-        box = colorChannel();
-        border = text = box;
+struct Slider{
+    SDL_FRect knob, track;
+    bool dragging;
+    float val;
+    Slider(){
+        knob = track = {0};
+        dragging = false;
+        val = 1.0f;
+    }
+    Slider(float x, float y, float w, float h, float knobW, float knobH, float initialVal = 1.0f, bool drg = false){
+        track = {x, y, w, h};
+        knob = {x + w - knobW / 2, y + h /2 - knobH / 2, knobW, knobH};
+        val = initialVal;
+        dragging = drg;
     }
 };

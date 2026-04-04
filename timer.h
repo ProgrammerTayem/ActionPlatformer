@@ -7,13 +7,14 @@ class Timer {
     Timer(float length) : len(length), tm(0.0f), tmout(false) {}
     bool step(float tmDelta){
         tm += tmDelta;
-        if(tm > len){
+        if(tm >= len){
             tm -= len;
             tmout = true;
             return true;
         }
         return false;
     }
+    void prime() { tm = len; tmout = true; }
     bool isTmOut() const { return tmout; }
     float getTime() const { return tm; }
     void reset() { tm = 0.0f; tmout = false; }
