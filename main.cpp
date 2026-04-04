@@ -9,8 +9,9 @@
 
 #define MINIAUDIO_IMPLEMENTATION
 #include "miniaudio.h"
-//#include <glm/glm.hpp>
 
+// This structure stores basic information of the window, renderer and the audio engine
+// The constructor is basically to store the keys pressed
 struct SDLState{
     SDL_Window *window;
     SDL_Renderer *renderer;
@@ -21,11 +22,14 @@ struct SDLState{
     SDLState() : keys(SDL_GetKeyboardState(nullptr)) {}
 };
 
+// Which interface to use currently
 enum class currentInterface{
     MENU, GAME
 };
-currentInterface T = currentInterface::MENU;
 
+bool collision = false;
+
+// All resources (textures / animations) loading and unloading process is accumulated in this struct
 struct Resource{
     const int PLAYER_IDLE_ANIMATION = 0;
     const int PLAYER_RUNNING_ANIMATION = 1;
@@ -43,7 +47,8 @@ struct Resource{
     std::vector<SDL_Texture*> textures;
     SDL_Texture* idleTex, *runTex, *groundTex, *panelTex, *enemyTex, *grassTex, *brickTex, *slideTex, *bckgrnd1Tex, *bckgrnd2Tex, 
                 *bckgrnd3Tex, *bckgrnd4Tex, *bulletTex, *bulletHitTex, *shootTex, *runShootTex, *slideShootTex, *enemyHitTex,
-                *enemyDieTex;
+                *enemyDieTex, *ButtonTex;
+    std::vector<Button> buttons;
 
     SDL_Texture* getTex(const std::string &path, SDL_Renderer *renderer){
         SDL_Texture *tex = IMG_LoadTexture(renderer, path.c_str());
@@ -51,6 +56,22 @@ struct Resource{
         textures.push_back(tex);
         return tex;
     }
+
+    void getButton(const char *txt, glm::vec2 pos, float w, float h, colorChannel box = colorChannel(), 
+                    colorChannel border = colorChannel(), colorChannel text = colorChannel(), SDL_Texture* tex = nullptr, 
+                    buttonState state = buttonState::active){
+            Button button;
+            button.s = txt;
+            button.pos = pos;
+            button.w = w;
+            button.h = h;
+            button.box = box;
+            button.border = border;
+            button.text = text;
+            button.state = state;
+            if(tex == nullptr) tex = ButtonTex;
+            buttons.push_back(button);
+        }
 
     void load(SDLState &state){
         animationsPlayer.resize(5);
@@ -86,27 +107,29 @@ struct Resource{
         enemyTex = getTex("resources/enemy.png", state.renderer);
         enemyHitTex = getTex("resources/enemy_hit.png", state.renderer);
         enemyDieTex = getTex("resources/enemy_die.png", state.renderer);
+        ButtonTex = getTex("resources/button.png", state.renderer);
+        getButton("Play", glm::vec2(static_cast<float>(state.logW/2-75), static_cast<float>(state.logH/2-15)), 150, 30);
     }
 
     void unload(){
         for(SDL_Texture* tex : textures){
             SDL_DestroyTexture(tex);
         }
+        buttons.clear();
     }
 };
 
-const int LAYER_LEVEL_IDX = 0;
-const int LAYER_CHARACTER_IDX = 1;
 
+const int LAYER_LEVEL_IDX = 0;
+const int LAYER_CHARACTER_IDX = 1;;
 struct GameState{
     std::array<std::vector<GameObject>, 2>layers;
-    std::vector<GameObject> BackgroundTile;
-    std::vector<GameObject> ForegroundTile;
     std::vector<GameObject> Bullets;
     SDL_FRect MapViewport;
+    currentInterface T, _buff;
     int playerIdx;
     float bg2scroll, bg3scroll, bg4scroll;
-    bool debugMode;
+    bool debugMode, entitiesLoaded;
     GameState(const SDLState &state) : playerIdx(-1) {
         MapViewport = SDL_FRect{
             .x = 0,
@@ -116,9 +139,15 @@ struct GameState{
         };
         bg2scroll = bg3scroll = bg4scroll = 0.0f;
         debugMode = false;
+        entitiesLoaded = false;
+        T = currentInterface::MENU;
+        _buff = T;
     }
     GameObject &getPlayer(){
         return layers[LAYER_CHARACTER_IDX][playerIdx];
+    }
+    void changeState(){
+        T = _buff;
     }
 };
 
@@ -131,10 +160,11 @@ const int HP_BAR_HEIGHT = 15;
 void cleanup(SDLState &state);
 bool init(SDLState &state);
 void DrawObj(const SDLState &state, GameState &gs, GameObject &obj, float width, float height, float timeDelta);
+void drawButton(const SDLState &state, Resource &res);
 void update(const SDLState &state, GameState &gs,GameObject &obj, Resource &res, float timeDelta, ma_engine engine);
 void CollisionDetection(const SDLState &state, GameState &gs, GameObject &a, GameObject &b, float timeDelta, Resource &res);
 void CollisionResponse(const SDLState &state, Resource &res, GameState &gs, GameObject &a, GameObject &b, const SDL_FRect &recA, const SDL_FRect &recB, const SDL_FRect &intersect, float timeDelta, ma_engine engine);
-void createTiles(const SDLState &state, GameState &gs, Resource &res);
+bool createTiles(const SDLState &state, GameState &gs, Resource &res);
 void HandleKey(const SDLState &state, GameState &gs, GameObject &obj, SDL_Scancode key, bool pressed);
 void DrawParallaxBackground(SDL_Renderer *renderer, SDL_Texture *tex, float xVel, float &scrollPos, float scrollFact, float timeDelta);
 
@@ -154,13 +184,8 @@ int main(int argc, char* argv[]){
     ma_sound_start(&music);
     GameState gs(state);
     res.load(state);
-    restart:
-    if(T == currentInterface::GAME){
-        createTiles(state, gs, res);
-    }
-    else{
-        playButton = {static_cast<float>(state.logW/2-75), static_cast<float>(state.logH/2-15), 150, 30};
-    }
+    //restart:
+    playButton = {static_cast<float>(state.logW/2-75), static_cast<float>(state.logH/2-15), 150, 30};
 
     uint64_t timeP = SDL_GetTicks();
 
@@ -168,10 +193,13 @@ int main(int argc, char* argv[]){
     while(running){
         uint64_t timeC = SDL_GetTicks();
         float timeDelta = (timeC - timeP) / 1000.0f;
+        if(!gs.entitiesLoaded && gs.T == currentInterface::GAME){
+            createTiles(state, gs, res);
+        }
 
         SDL_Event event{0};
         while(SDL_PollEvent(&event)){
-            if(T == currentInterface::MENU){
+            if(gs.T == currentInterface::MENU){
                 switch(event.type){
                     case SDL_EVENT_MOUSE_BUTTON_DOWN:
                     {
@@ -180,10 +208,10 @@ int main(int argc, char* argv[]){
                         my = event.button.y;
 
                         if (mx >= playButton.x && mx <= playButton.x + playButton.w && my >= playButton.y && my <= playButton.y + playButton.h) {
-                            T = currentInterface::GAME;
-                            //cleanup(state);
-                            goto restart;
+                            gs._buff = currentInterface::GAME;
                         }
+                        //cleanup(state);
+                        //goto restart;
                     }
                     break;
                     case SDL_EVENT_QUIT:
@@ -201,6 +229,7 @@ int main(int argc, char* argv[]){
                 case SDL_EVENT_WINDOW_RESIZED:
                     state.w = event.window.data1;
                     state.h = event.window.data2;
+                    break;
                 case SDL_EVENT_KEY_DOWN:
                      HandleKey(state, gs, gs.getPlayer(), event.key.scancode, true);
                      break;
@@ -214,16 +243,18 @@ int main(int argc, char* argv[]){
             }
         }
 
-        if(T == currentInterface::MENU){
+        if(gs.T == currentInterface::MENU){
             SDL_RenderTexture(state.renderer, res.bckgrnd1Tex, nullptr, nullptr);
             SDL_RenderTexture(state.renderer, res.bckgrnd2Tex, nullptr, nullptr);
             SDL_RenderTexture(state.renderer, res.bckgrnd3Tex, nullptr, nullptr);
             SDL_RenderTexture(state.renderer, res.bckgrnd4Tex, nullptr, nullptr);
-            SDL_FRect brdr = {playButton.x-1, playButton.y-1, playButton.w+2, playButton.h+2};
-            SDL_SetRenderDrawColor(state.renderer, 255, 255, 255, 255);
-            SDL_RenderFillRect(state.renderer, &playButton);
+            // SDL_FRect brdr = {0, 0, 32, 32};
+            SDL_RenderTexture(state.renderer, res.ButtonTex, NULL, &playButton);
+            // SDL_SetRenderDrawColor(state.renderer, 255, 255, 255, 255);
+            // SDL_RenderFillRect(state.renderer, &playButton);
+            // SDL_SetRenderDrawColor(state.renderer, 255, 50, 50, 255);
+            // SDL_RenderRect(state.renderer, &brdr);
             SDL_SetRenderDrawColor(state.renderer, 255, 50, 50, 255);
-            SDL_RenderRect(state.renderer, &brdr);
             SDL_RenderDebugText(state.renderer, playButton.x+playButton.w/2-15, playButton.y+playButton.h/2-4, "Play");
             //char mouse[20];
             //SDL_snprintf(mouse, 20, "X: %f Y: %f", mx, my);
@@ -231,10 +262,10 @@ int main(int argc, char* argv[]){
             SDL_RenderPresent(state.renderer);
         }
 
-        if(T == currentInterface::GAME){
+        if(gs.T == currentInterface::GAME){
             for(auto &layer : gs.layers){
                 for(GameObject &obj : layer){
-                    update(state, gs, obj, res, timeDelta, state.engine);
+                    if(obj.Tar == ObjectTarget::playable) update(state, gs, obj, res, timeDelta, state.engine);
                 }
             }
 
@@ -244,8 +275,8 @@ int main(int argc, char* argv[]){
 
             gs.MapViewport.x = gs.getPlayer().pos.x + TILE_SIZE / 2 - state.logW / 2;
 
-            SDL_SetRenderDrawColor(state.renderer, 20, 10, 30, 255);
-            SDL_RenderClear(state.renderer);
+            // SDL_SetRenderDrawColor(state.renderer, 20, 10, 30, 255);
+            // SDL_RenderClear(state.renderer);
 
             SDL_RenderTexture(state.renderer, res.bckgrnd1Tex, nullptr, nullptr);
             DrawParallaxBackground(state.renderer, res.bckgrnd4Tex, gs.getPlayer().vel.x, gs.bg4scroll, 0.075f, timeDelta);
@@ -263,25 +294,27 @@ int main(int argc, char* argv[]){
                         MVx = gs.MapViewport.x;
                     }
                 }
-                SDL_snprintf(stateText, sizeof(stateText), "S: %d B: %d Grnd: %d IB: %d Bx: %f MVx: %f", static_cast<int>(gs.getPlayer().data.player.state), gs.Bullets.size(), gs.getPlayer().grounded, idle_bullets, Bx, MVx);
+                SDL_snprintf(stateText, sizeof(stateText), "S: %d B: %d Grnd: %d IB: %d Bx: %f MVx: %f C: %d", static_cast<int>(gs.getPlayer().data.player.state), gs.Bullets.size(), gs.getPlayer().grounded, idle_bullets, Bx, MVx, collision);
                 
 
                 SDL_RenderDebugText(state.renderer, 5, 5, stateText);
             }
 
-            for(auto &obj : gs.BackgroundTile){
-                SDL_FRect to{
+            for(auto &obj : gs.layers[LAYER_LEVEL_IDX]){
+                if(obj.Tar == ObjectTarget::background){
+                    SDL_FRect to{
                     .x = obj.pos.x - gs.MapViewport.x,
                     .y = obj.pos.y,
                     .w = static_cast<float>(obj.texture->w),
                     .h = static_cast<float>(obj.texture->h)
-                };
-                SDL_RenderTexture(state.renderer, obj.texture, nullptr, &to);
+                    };
+                    SDL_RenderTexture(state.renderer, obj.texture, nullptr, &to);
+                }
             }
 
             for(auto &layer : gs.layers){
                 for(GameObject &obj : layer){
-                    DrawObj(state, gs, obj, TILE_SIZE, TILE_SIZE, timeDelta);
+                    if(obj.Tar == ObjectTarget::playable); DrawObj(state, gs, obj, TILE_SIZE, TILE_SIZE, timeDelta);
                 }
             }
 
@@ -289,14 +322,16 @@ int main(int argc, char* argv[]){
                 if(gb.data.bullet.state != BulletState::idle) DrawObj(state, gs, gb, gb.hitbox.w, gb.hitbox.h, timeDelta);
             }
 
-            for(auto &obj : gs.ForegroundTile){
-                SDL_FRect to{
+            for(auto &obj : gs.layers[LAYER_LEVEL_IDX]){
+                if(obj.Tar == ObjectTarget::foreground){
+                    SDL_FRect to{
                     .x = obj.pos.x - gs.MapViewport.x,
                     .y = obj.pos.y,
                     .w = static_cast<float>(obj.texture->w),
                     .h = static_cast<float>(obj.texture->h)
-                };
-                SDL_RenderTexture(state.renderer, obj.texture, nullptr, &to);
+                    };
+                    SDL_RenderTexture(state.renderer, obj.texture, nullptr, &to);
+                }
             }
 
             float percHP = gs.getPlayer().data.player.HP / gs.getPlayer().data.player.HPmax;
@@ -321,7 +356,8 @@ int main(int argc, char* argv[]){
             SDL_RenderPresent(state.renderer);
         }
         timeP = timeC;
-
+        collision = false;
+        gs.changeState();
     }
     res.unload();
     cleanup(state);
@@ -384,7 +420,7 @@ void DrawObj(const SDLState &state, GameState &gs, GameObject &obj, float width,
         }
 
     }
-        if(gs.debugMode){
+        if(gs.debugMode && obj.Tar == ObjectTarget::playable){
         SDL_FRect rectA{
         .x = obj.pos.x + obj.hitbox.x - gs.MapViewport.x,
         .y = obj.pos.y + obj.hitbox.y,
@@ -396,6 +432,15 @@ void DrawObj(const SDLState &state, GameState &gs, GameObject &obj, float width,
         SDL_RenderFillRect(state.renderer, &rectA);
         //SDL_RenderFillRect(state.renderer, &gs.MapViewport);
         SDL_SetRenderDrawBlendMode(state.renderer, SDL_BLENDMODE_NONE);
+    }
+}
+
+void drawButton(const SDLState &state, Resource &res){
+    for(auto &b : res.buttons){
+        SDL_FRect brdr{
+            .x = b.pos.x + 1, .y = b.pos.y + 1, .w = b.w-2, .h = b.h-2
+        };
+        
     }
 }
 
@@ -558,11 +603,12 @@ void update(const SDLState &state, GameState &gs,GameObject &obj, Resource &res,
     }
     obj.vel += obj.acc * curDir * timeDelta;
     if(std::abs(obj.vel.x) > obj.maxSpeedX) obj.vel.x = obj.maxSpeedX * curDir;
+
     obj.pos += obj.vel * timeDelta;
     bool foundGround = false;
     for(auto &layer : gs.layers){
         for(GameObject &other : layer){
-            if(&other != &obj){
+            if(&other != &obj && other.Tar == ObjectTarget::playable){
                 CollisionDetection(state, gs, obj, other, timeDelta, res);
                 
                 SDL_FRect sensor{
@@ -579,12 +625,17 @@ void update(const SDLState &state, GameState &gs,GameObject &obj, Resource &res,
                 };
                 SDL_FRect intersect{0};
                 if(SDL_GetRectIntersectionFloat(&sensor, &otherRect, &intersect)){
-                    if(intersect.h < intersect.w)
+                    if(gs.debugMode){
+                        SDL_SetRenderDrawColor(state.renderer, 0, 0, 255, 255);
+                        SDL_RenderFillRect(state.renderer, &intersect);
+                    }
+                    if(intersect.h <= intersect.w)
                     foundGround = true;
                 }
             }
         }
     }
+
     if(foundGround != obj.grounded){
         obj.grounded = foundGround;
         if(obj.type == ObjectType::player && foundGround){
@@ -626,7 +677,8 @@ void CollisionResponse(const SDLState &state, Resource &res, GameState &gs, Game
                 genericResponse();
                 break;
             case ObjectType::enemy:
-            if(b.data.enemy.hitRate.step(timeDelta)) a.data.player.HP -= 10; 
+                if(b.data.enemy.hitRate.step(timeDelta)) a.data.player.HP = SDL_max(0, a.data.player.HP-10);
+                a.flashes = true;
                 genericResponse();
                 break;
         }
@@ -682,6 +734,7 @@ void CollisionResponse(const SDLState &state, Resource &res, GameState &gs, Game
     
 
 void CollisionDetection(const SDLState &state, GameState &gs, GameObject &a, GameObject &b, float timeDelta, Resource &res){
+    if(a.Tar != ObjectTarget::playable && b.Tar != ObjectTarget::playable) return;
     SDL_FRect rectA{
         .x = a.pos.x + a.hitbox.x,
         .y = a.pos.y + a.hitbox.y,
@@ -706,7 +759,7 @@ void CollisionDetection(const SDLState &state, GameState &gs, GameObject &a, Gam
 
 }
 
-void createTiles(const SDLState &state, GameState &gs, Resource &res){
+bool createTiles(const SDLState &state, GameState &gs, Resource &res){
     /*
         1- Ground
         2- Panel
@@ -716,8 +769,8 @@ void createTiles(const SDLState &state, GameState &gs, Resource &res){
         6- Brick
     */
     short mapData[MAX_ROWS][MAX_COLS] = {
-        2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-		2, 0, 0, 3, 0, 0, 0, 2, 2, 0, 3, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 3, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
+        2, 4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 2, 2, 2, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+		2, 0, 0, 3, 0, 0, 0, 2, 2, 0, 3, 0, 0, 0, 0, 0, 2, 0, 0, 0, 0, 3, 3, 0, 2, 0, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2,
 		2, 0, 0, 0, 0, 2, 0, 0, 2, 2, 2, 2, 0, 2, 2, 2, 0, 0, 3, 2, 2, 2, 2, 0, 0, 2, 0, 0, 0, 0, 0, 2, 2, 2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 2,
 		2, 2, 0, 0, 2, 2, 2, 0, 0, 0, 3, 0, 0, 3, 0, 2, 2, 2, 2, 2, 0, 0, 2, 2, 0, 3, 0, 0, 3, 0, 2, 3, 3, 3, 0, 2, 0, 3, 3, 0, 0, 3, 0, 3, 0, 3, 0, 0, 2, 2,
 		1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1
@@ -739,9 +792,10 @@ void createTiles(const SDLState &state, GameState &gs, Resource &res){
 		0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
     };
     const auto loadMap = [&state, &res, &gs](short layer[MAX_ROWS][MAX_COLS]){
-        const auto createObj = [&state](SDL_Texture *tex, int r, int c, ObjectType type){
+        const auto createObj = [&state](SDL_Texture *tex, int r, int c, ObjectType type, ObjectTarget T = ObjectTarget::playable){
         GameObject obj;
         obj.type = type;
+        obj.Tar = T;
         obj.texture = tex;
         obj.pos = glm::vec2(c * TILE_SIZE, state.logH - (MAX_ROWS - r) * TILE_SIZE);
         obj.hitbox = {
@@ -779,7 +833,7 @@ void createTiles(const SDLState &state, GameState &gs, Resource &res){
                             enem.hitbox = SDL_FRect{
                                 .x = 10,
                                 .y = 4,
-                                .w = 12,
+                                .w = 18,
                                 .h = 28
                             };
                             gs.layers[LAYER_CHARACTER_IDX].push_back(enem);
@@ -787,14 +841,16 @@ void createTiles(const SDLState &state, GameState &gs, Resource &res){
                         }
                     case 5:
                         {
-                        GameObject grass = createObj(res.grassTex, r, c, ObjectType::level);
-                        gs.ForegroundTile.push_back(grass);
+                        GameObject grass = createObj(res.grassTex, r, c, ObjectType::level, ObjectTarget::foreground);
+                        // gs.ForegroundTile.push_back(grass);
+                        gs.layers[LAYER_LEVEL_IDX].push_back(grass);
                         break;
                         }
                     case 6:
                         {
-                        GameObject brick = createObj(res.brickTex, r, c, ObjectType::level);
-                        gs.BackgroundTile.push_back(brick);
+                        GameObject brick = createObj(res.brickTex, r, c, ObjectType::level, ObjectTarget::background);
+                        // gs.BackgroundTile.push_back(brick);
+                        gs.layers[LAYER_LEVEL_IDX].push_back(brick);
                         break;
                         }
                     case 4:
@@ -823,7 +879,9 @@ void createTiles(const SDLState &state, GameState &gs, Resource &res){
     loadMap(mapData);
     loadMap(BackgroundMapData);
     loadMap(ForegroundMapData);
+    gs.entitiesLoaded = true;
     assert(gs.playerIdx != -1);
+    return true;
 }
 
 void HandleKey(const SDLState &state, GameState &gs, GameObject &obj, SDL_Scancode key, bool pressed){

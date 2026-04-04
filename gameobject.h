@@ -9,6 +9,10 @@ enum class ObjectType{
     player, level, enemy, bullet
 };
 
+enum class ObjectTarget{
+    playable, background, foreground, destructible
+};
+
 enum class PlayerState{
     idle, running, jumping
 };
@@ -19,6 +23,10 @@ enum class BulletState{
 
 enum class enemyState{
     shambling, damaged, dead
+};
+
+enum class buttonState{
+    inactive, active, hovering
 };
 
 struct PlayerData{
@@ -62,6 +70,7 @@ struct GameObject{
     float dir;
     float maxSpeedX;
     bool dynamic, grounded, flashes;
+    ObjectTarget Tar;
     
     GameObject(): data{.level = LevelData()}, flashTimer(0.05)
     {
@@ -76,5 +85,33 @@ struct GameObject{
         grounded = false;
         hitbox = {0};
         flashes = false;
+        Tar = ObjectTarget::playable;
+    }
+};
+
+struct colorChannel{
+    Uint8 r, g, b, alpha;
+    colorChannel(){
+        r = g = b = 0;
+        alpha = 255;
+    }
+    colorChannel(Uint8 a, Uint8 b, Uint8 c, Uint8 d){
+        r = a, g = b, b = c, alpha = d;
+    }
+};
+
+struct Button{
+    buttonState state;
+    glm::vec2 pos;
+    float h, w;
+    const char *s;
+    colorChannel box, border, text;
+    SDL_Texture *texture;
+    Button(){
+        state = buttonState::active;
+        pos = glm::vec2(0, 0);
+        h = 25.0f, w = 150.f;
+        box = colorChannel();
+        border = text = box;
     }
 };
